@@ -1,0 +1,41 @@
+# Call Libraries
+library("affy")
+library("oligo")
+library("GEOquery")
+library("Biobase")
+library("tidyr")
+library("splitstackshape")
+library("arrayQualityMetrics")
+library(dplyr)
+library(tidyverse)
+
+# Set Working Directory
+setwd("D:/CancerData")
+
+# Read celFiles
+celFiles <- list.celfiles()
+affyRaw <- read.celfiles(celFiles)
+
+# RMA normalizationMethods
+normalized.expr <- oligo::rma(affyRaw)
+
+# Write Expression DataFrame
+write.exprs(normalized.expr, file= "normaldata.txt")
+
+#[Put "ID" in the first column of normadata.txt in the WD]
+
+#Make Data Frame
+normalized.data <- read.delim("normaldata.txt", check.names = FALSE)
+
+# map probe IDs to gene symbols
+gse <- getGEO("GSE35493", GSEMatrix = TRUE)
+
+# fetch feature data to get ID - gene symbol mapping
+feature.data <- gse$GSE35493_series_matrix.txt.gz@featureData@data
+
+# subset
+feature.data <- feature.data[,c(1,11)]
+
+
+# Combine dataset
+combined <- left_join(normalized.data, feature.data, by = "ID")
