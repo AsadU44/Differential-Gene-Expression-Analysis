@@ -1,0 +1,246 @@
+---
+title: "DESeq2 Workflow"
+author: "Asad"
+date: "4/18/2023"
+output: pdf_document
+---
+**1. Calling libraries**
+```{r}
+library(DESeq2)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(dplyr)
+library(readr)
+library(EnhancedVolcano)
+library(textshaping)
+library(magrittr)
+```
+
+**2. Reading Counts and Sample Information**
+```{r}
+counts <- read.csv('D:/GSE171110_COVID/GSE171110_CovidBlood.csv', header = T, row.names = 1)
+info <- read.csv('D:/GSE171110_COVID/sample_info.csv', header = T, row.names = 1)
+
+```
+
+**3. #Identifying outliers**
+#Method 1 with hierarchical clustering
+```{r}
+htree<- hclust(dist(t(counts)), method = 'average')
+plot(htree)
+```
+
+#Method 2 with PCA Analysis
+```{r}
+pca <- prcomp(t(counts))
+pca.dat <- pca$x
+
+pca.var <- pca$sdev^2
+pca.var.percent <- round(pca.var/sum(pca.var)*100, digits = 2)
+
+pca.dat <- as.data.frame(pca.dat)
+
+ggplot(pca.dat, aes(PC1, PC2)) +
+  geom_point() +
+  geom_text(label = rownames(pca.dat)) +
+  labs(x = paste0('PC1: ', pca.var.percent[1], ' %'),
+       y = paste0('PC2: ', pca.var.percent[2], ' %'))
+```
+
+**4. Removing outliers**
+```{r}
+samples.to.be.excluded <- c('GSM5219000', 'GSM5219016', 'GSM5219014',
+                            'GSM5219021', 'GSM5219024', 'GSM5219040',
+                            'GSM5219000','GSM5219037', 'GSM5219039',
+                            'GSM5219012')
+
+final_counts <- counts[,!(colnames(counts) %in% samples.to.be.excluded)]
+final_info<- info[!(row.names(info) %in% samples.to.be.excluded),]
+```
+
+*In this Step We Need to Collapse Technical Replicates and Take Sums if the dataset contains TR*
+
+#If we know the batch information then:
+
+```{r}
+final_info$Batch=as.factor(final_info$Batch)
+```
+
+**5. Method I (batch known): Setting condition and Removing low-expressed genes**
+```{r}
+dds <- DESeqDataSetFromMatrix(countData=final_counts, 
+      colData=final_info, design =  ~ Batch+Condition)
+keep <- rowSums(counts(dds)) > 50
+dds <- dds[keep,]
+```
+
+**6. Method 2: In case the Batch information is not known**
+```{r}
+dds <- DESeqDataSetFromMatrix(final_counts, final_info, ~Condition)
+keep <- rowSums(counts(dds)) > 50
+dds <- dds[keep,]
+```
+
+**7. Set reference groups**
+```{r}
+dds$Condition<-relevel(dds$Condition, ref = 'Control')
+```
+
+**8. Main DESEQ**
+```{r}
+ddsDE <- DESeq(dds)
+```
+
+**9. MA Plot**
+```{r}
+plotMA(ddsDE, ylim=c(-5,5))
+vsdata <- vst(ddsDE, blind = FALSE)
+```
+
+**10. PCA Plot**
+```{r}
+plotPCA(vsdata, intgroup= "Condition")+ 
+  geom_label(aes(label = name))
+```
+
+**11. Dispersion Plot**
+```{r}
+plotDispEsts(ddsDE)
+```
+
+**12.Save Normalized Read Counts**
+```{r}
+normCounts <-counts(ddsDE, normalized=T)
+write.csv(normCounts, "Normalized Read Counts.csv")
+```
+
+**13. Retrieve DESeq Result**
+```{r}
+res<- results(ddsDE, alpha = 0.05)
+write.csv(res, file = 'DEGs.csv')
+```
+
+**14. Make Contrast between Design**
+```{r}
+resultsNames(ddsDE)
+con.res<- results(ddsDE, contrast = c("Condition", 'Control', 'Covid'))
+```
+
+**15. Check Summary of the Results**
+```{r}
+summary(res)
+```
+
+**16. Reorder Results**
+```{r}
+resOrdered <- res[order(res$padj),]
+```
+
+**16. Convert ENSEMBL ID to Gene Symbol**
+```{r}
+resOrdered$symbol<- mapIds(org.Hs.eg.db, keys=rownames(resOrdered), keytype = "ENSEMBL", column = "SYMBOL")
+head(resOrdered)
+```
+
+**17. Plot a Single Transcript**
+```{r}
+plotCounts(ddsDE, gene="ENSG00000152583", intgroup="Condition")
+```
+
+**18. Stratify**
+```{r}
+res1 <- as.data.frame(resOrdered)
+res1<- filter(res1, padj<0.01, log2FoldChange>1 | log2FoldChange< -1)
+```
+
+**19. Remove Duplicates ans Save**
+
+```{r}
+Significant_DEGs<- res1[!duplicated(res1$symbol),]
+
+write.csv(Significant_DEGs, file = 'Significant_DEGs.csv')
+```
+
+**20. Save Significant UPs and Downs**
+```{r}
+Significant_Up<- subset(Significant_DEGs,log2FoldChange>1) 
+Significant_Down<- subset(Significant_DEGs,log2FoldChange< -1)
+
+write.csv(Significant_Up, file = 'Up_DEGs.csv')
+write.csv(Significant_Down, file = 'Down_DEGs.csv')
+```
+
+**21. Volcano Plot**
+```{r}
+#Method 1
+Plot.df<-data.frame(res1)
+
+EnhancedVolcano(Plot.df, x="log2FoldChange", y="padj", lab = Plot.df$symbol, pCutoff = 0.01, FCcutoff = 1)
+
+#Method 2
+EnhancedVolcano(Plot.df,
+                lab = Plot.df$symbol,
+                x = 'log2FoldChange',
+                y = 'pvalue',
+                title = 'Control vs COVID-19',
+                pCutoff = 10e-16,
+                FCcutoff = 1.5,
+                pointSize = 3.0,
+                labSize = 6.0,
+                shape = c(1, 4, 23, 25),
+                colAlpha = 1)
+```
+
+**22. Quality Assessment**
+
+```{r}
+#Read counts distribution across samples
+colSums(counts(dds))
+lol<- colSums(counts(dds)) %>% barplot
+par(mfrow=c(1,2))
+```
+
+```{r}
+#adding the boxplots
+counts.sf_normalized <- counts(ddsDE, normalized=TRUE)
+boxplot(counts.sf_normalized, main = "SF normalized", cex = .6)
+boxplot(counts(dds), main = "read counts only", cex = .6)
+```
+
+```{r}
+#Boxplots of read counts before and after normalization
+boxplot(log2(counts(ddsDE)+1), notch=TRUE,
+        main = "Non-normalized read counts",
+        ylab="log2(read counts)", cex = .6)
+
+
+boxplot(log2(counts(ddsDE, normalize= TRUE) +1), notch=TRUE,
+        main = "Size-factor-normalized read counts",
+        ylab="log2(read counts)", cex = .6)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
