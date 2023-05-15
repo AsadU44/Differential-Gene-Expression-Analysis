@@ -64,20 +64,48 @@ fData(gset) <- data.frame(Symbol=Symbol)
 
 #plotMDS(gset)
 
-#Perform DEG Analysis
+#Perform DEG Analysis with two groups
 Groups<- factor(c("Normal", "Normal", "Normal","Normal", "Normal", 
                   "Normal","Tumor","Tumor","Tumor","Tumor","Tumor","Tumor"))
 design<- model.matrix(~Groups-1)
 gset <- removeBatchEffect(gset, design=design)
 colnames(design)<- c("Normal","Tumor")
 head(design)
+#voom(gset, design, plot=TRUE) #Check mean variance trend
 fit<- lmFit(gset, design)
 contrast.mat<- makeContrasts("Tumor-Normal", levels = design)
 fit2<- contrasts.fit(fit, contrast.mat)
 fit3<-eBayes(fit2)
 options(digits = 2)
 topTable(fit3)
+summary(decideTests(fit3))
+#####################################################################
+## Contrasting more than two groups and dealing with batch effects
 
+Groups<- factor(rep(c("Normal","Tumor", 'Diabetes'), c(4,4,4)))
+Batch<- factor(rep(c('A',"B","C", 'D'), c(3,3,3,3)))
+
+design <- model.matrix(~0+Groups+Batch)
+colnames(design) <- gsub("Groups", "", colnames(design))
+
+contr.matrix <- makeContrasts(
+  NormalvsTumor = 'Normal-Tumor', 
+  NormalvsDiabetes = 'Normal - Diabetes', 
+  TumorvsNormal = 'Tumor - Normal', 
+  levels = colnames(design))
+
+#Voom(gset, design, plot=TRUE) #Check mean variance trend
+vfit <- lmFit(gset, design)
+vfit2 <- contrasts.fit(vfit, contrasts=contr.matrix)
+vfit3 <- eBayes(vfit2)
+
+# plotSA(vfit3, main="Final model: Mean-variance trend") #Final variance trend
+summary(decideTests(vfit3))
+#Extract genes for each group
+Normal.vs.Tumor <- topTable(vfit3, coef=1, n=Inf)
+Normal.vs.Diabetes<- topTable(vfit3, coef=2, n=Inf)
+
+#####################################################################
 #Identify DEGs
 DEGs<- topTable(fit3, n=Inf, adjust="BH")
 write.csv(DEGs, file="DEGs.csv")
